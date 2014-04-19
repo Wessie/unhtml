@@ -5,7 +5,6 @@ import (
 	"io"
 	"reflect"
 	"strconv"
-	"strings"
 
 	"gopkg.in/xmlpath.v1"
 )
@@ -71,10 +70,6 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 	}
 
 	return &Decoder{root: root}, nil
-}
-
-func NewDecoderFromString(s string) (*Decoder, error) {
-	return NewDecoder(strings.NewReader(s))
 }
 
 // Unmarshal tries to fill the value given with the input previously
