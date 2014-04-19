@@ -52,9 +52,14 @@ var relativeTests = []Test{
 		}{"Hello", "World"},
 	},
 	{
-		path:     "/ul",
+		path:     "/ul/li",
 		html:     "<ul><li>0</li><li>1</li><li>2</li></ul>",
 		expected: []int{0, 1, 2},
+	},
+	{
+		path:     "/ul/li",
+		html:     "<ul><li>10</li><li>20</li><li>30</li></ul>",
+		expected: [...]int{10, 20, 30},
 	},
 }
 

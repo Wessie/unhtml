@@ -87,21 +87,58 @@ func (d *Decoder) Unmarshal(res interface{}) error {
 
 // UnmarshalRelative unmarshals from the node depicted by the path
 // given. This allows you to move the root node before unmarshalling.
+//
+// UnmarshalRelative can return errors from the following pieces:
+// - unhtml errors
+// - xmlpath path compiling
+// - encoding.TextUnmarshaler
+// - unhtml.Unmarshaler
 func (d *Decoder) UnmarshalRelative(path string, res interface{}) error {
+	// Compile the path before doing anything else
 	xpath, err := xmlpath.Compile(path)
-
 	if err != nil {
 		return err
 	}
 
-	st := &state{}
+	var nodes []*xmlpath.Node
+	var st = &state{}
 
-	// Only use the first node we find
+	um, utm, v := indirect(reflect.ValueOf(res))
+
+	isSlice := v.Kind() == reflect.Slice || v.Kind() == reflect.Array
+
 	for iter := xpath.Iter(d.root); iter.Next(); {
-		return st.unmarshal(iter.Node(), reflect.ValueOf(res))
+		nodes = append(nodes, iter.Node())
+
+		// Only use the first node we find if `res` is not a slice or array
+		if !isSlice {
+			break
+		}
 	}
 
-	return NoNodesAvailable(path)
+	// No results were found
+	if len(nodes) == 0 {
+		return NoNodesAvailable(path)
+	}
+
+	node := nodes[0]
+	if um != nil {
+		return um.UnmarshalHTML(node.Bytes())
+	} else if utm != nil {
+		return utm.UnmarshalText(node.Bytes())
+	} else if !isSlice {
+		// no-interface, no-slice value, unmarshal normally
+		return st.unmarshal(node, v)
+	}
+
+	// Special casing []byte and []rune to fill as-is
+	sliceType := v.Type().Elem().Kind()
+	if sliceType == reflect.Uint8 || sliceType == reflect.Int32 {
+		return st.unmarshal(node, v)
+	}
+
+	// Multi-node, with slice or array argument, fill it with multinode
+	return st.multinode(nodes, v)
 }
 
 // state is used to keep track of errors that occurred, we don't want
