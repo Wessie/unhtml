@@ -15,6 +15,8 @@ import (
 // ALWAYS set this to false before pushing
 const debug = false
 
+// NoNodesAvailable is returned when an xpath to *Relative functions
+// are unable to find any matching nodes.
 type NoNodesAvailable string
 
 func (e NoNodesAvailable) Error() string {
@@ -52,13 +54,45 @@ func (e *InvalidUnmarshalError) Error() string {
 // receive the raw resulting node to unmarshal into the
 // type.
 //
-// This receives a []byte of the contents of the current node
-// (which might, or might not be HTML depending on node).
+// This receives a []byte of all text nodes found concatted
+// together in the current node.
 type Unmarshaler interface {
 	UnmarshalHTML([]byte) error
 }
 
-// Decoder
+// Unmarshal parses the HTML in reader and extracts data from it, results
+// are stored in the value pointed to by result.
+//
+// rootpath can be given to move the root node before unmarshalling, pass
+// an empty string to omit moving the root node.
+//
+// Unmarshal can store values into the following types:
+//
+// 	string, []byte, []rune
+// 	Any size unsigned integer and signed integer
+// 	float32, float64
+// 	An Unmarshaller
+// 	An encoding.TextUnmarshaller
+// 	Struct fields with an `unhtml` tag
+// 	Slices and arrays containing any of the above types
+//
+// Any xpaths intended for Unmarshalling need to be compatible with the supported
+// features gopkg.in/xmlpath.v1, see http://godoc.org/gopkg.in/xmlpath.v1 for
+// documentation on supported features.
+func Unmarshal(r io.Reader, result interface{}, rootpath string) error {
+	d, err := NewDecoder(r)
+
+	if err != nil {
+		return err
+	}
+
+	if rootpath == "" {
+		return d.Unmarshal(result)
+	} else {
+		return d.UnmarshalRelative(rootpath, result)
+	}
+}
+
 type Decoder struct {
 	root *xmlpath.Node
 }
@@ -79,11 +113,14 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 }
 
 // Unmarshal tries to fill the value given with the input previously
-// given to the Decoder. See `unhtml.Unmarshal` for full docs.
-func (d *Decoder) Unmarshal(res interface{}) error {
+// given to the Decoder.
+//
+// Unmarshal only takes a struct as result type, use UnmarshalRelative
+// for other types.
+func (d *Decoder) Unmarshal(result interface{}) error {
 	st := &state{}
 
-	st.unmarshal(d.root, reflect.ValueOf(res))
+	st.unmarshal(d.root, reflect.ValueOf(result))
 
 	return st.firstError
 }
@@ -91,8 +128,8 @@ func (d *Decoder) Unmarshal(res interface{}) error {
 // UnmarshalRelative unmarshals from the node depicted by the path
 // given. This allows you to move the root node before unmarshalling.
 //
-// UnmarshalRelative can return errors from the following pieces:
-// - unhtml errors
+// UnmarshalRelative can return the following errors:
+// - any unhtml errors
 // - xmlpath path compiling
 // - encoding.TextUnmarshaler
 // - unhtml.Unmarshaler
@@ -161,6 +198,7 @@ func (d *state) saveError(e error) {
 	}
 }
 
+// multinode handles slices and arrays
 func (d *state) multinode(nodes []*xmlpath.Node, value reflect.Value) {
 	switch value.Kind() {
 	case reflect.Array, reflect.Slice:
@@ -168,7 +206,7 @@ func (d *state) multinode(nodes []*xmlpath.Node, value reflect.Value) {
 		if debug {
 			fmt.Println("unsupported multinode: ", nodes)
 		}
-		err := &UnmarshalTypeError{"Multinode result", value.Type()}
+		err := &UnmarshalTypeError{"multinode result", value.Type()}
 
 		d.saveError(err)
 		return
@@ -198,6 +236,7 @@ func (d *state) multinode(nodes []*xmlpath.Node, value reflect.Value) {
 	}
 }
 
+// unmarshal handles any non-slice, non-array and non-struct values
 func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) {
 	m, tm, value := indirect(rv)
 
@@ -279,6 +318,7 @@ func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) {
 	}
 }
 
+// unmarshalStruct handles struct values
 func (d *state) unmarshalStruct(root *xmlpath.Node, value reflect.Value) {
 	valueType := value.Type()
 
