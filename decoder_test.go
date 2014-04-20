@@ -12,6 +12,8 @@ type Test struct {
 	expected interface{}
 }
 
+// some variables for pointer testing
+var zero, one, two = 0, 1, 2
 var relativeTests = []Test{
 	{
 		path:     "/test",
@@ -60,6 +62,11 @@ var relativeTests = []Test{
 		path:     "/ul/li",
 		html:     "<ul><li>10</li><li>20</li><li>30</li></ul>",
 		expected: [...]int{10, 20, 30},
+	},
+	{
+		path:     "/ul/li",
+		html:     "<ul><li>0</li><li>1</li><li>2</li></ul>",
+		expected: []*int{&zero, &one, &two},
 	},
 }
 

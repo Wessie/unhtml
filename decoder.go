@@ -165,6 +165,9 @@ func (d *state) multinode(nodes []*xmlpath.Node, value reflect.Value) {
 	switch value.Kind() {
 	case reflect.Array, reflect.Slice:
 	default:
+		if debug {
+			fmt.Println("unsupported multinode: ", nodes)
+		}
 		err := &UnmarshalTypeError{"Multinode result", value.Type()}
 
 		d.saveError(err)
@@ -351,17 +354,13 @@ func indirect(v reflect.Value) (Unmarshaler, encoding.TextUnmarshaler, reflect.V
 	for {
 		if v.Kind() == reflect.Interface && !v.IsNil() {
 			e := v.Elem()
-			if e.Kind() == reflect.Ptr && !e.IsNil() && e.Elem().Kind() == reflect.Ptr {
+			if e.Kind() == reflect.Ptr && !e.IsNil() {
 				v = e
 				continue
 			}
 		}
 
 		if v.Kind() != reflect.Ptr {
-			break
-		}
-
-		if v.Elem().Kind() != reflect.Ptr && v.CanSet() {
 			break
 		}
 
