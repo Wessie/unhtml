@@ -2,12 +2,18 @@ package unhtml
 
 import (
 	"encoding"
+	"fmt"
 	"io"
 	"reflect"
 	"strconv"
+	"strings"
 
 	"gopkg.in/xmlpath.v1"
 )
+
+// Set to true to enable debugging prints sprinkled in the code
+// ALWAYS set this to false before pushing
+const debug = false
 
 type NoNodesAvailable string
 
@@ -77,7 +83,9 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 func (d *Decoder) Unmarshal(res interface{}) error {
 	st := &state{}
 
-	return st.unmarshal(d.root, reflect.ValueOf(res))
+	st.unmarshal(d.root, reflect.ValueOf(res))
+
+	return st.firstError
 }
 
 // UnmarshalRelative unmarshals from the node depicted by the path
@@ -123,17 +131,20 @@ func (d *Decoder) UnmarshalRelative(path string, res interface{}) error {
 		return utm.UnmarshalText(node.Bytes())
 	} else if !isSlice {
 		// no-interface, no-slice value, unmarshal normally
-		return st.unmarshal(node, v)
+		st.unmarshal(node, v)
+		return st.firstError
 	}
 
 	// Special casing []byte and []rune to fill as-is
 	sliceType := v.Type().Elem().Kind()
 	if sliceType == reflect.Uint8 || sliceType == reflect.Int32 {
-		return st.unmarshal(node, v)
+		st.unmarshal(node, v)
+		return st.firstError
 	}
 
 	// Multi-node, with slice or array argument, fill it with multinode
-	return st.multinode(nodes, v)
+	st.multinode(nodes, v)
+	return st.firstError
 }
 
 // state is used to keep track of errors that occurred, we don't want
@@ -150,11 +161,14 @@ func (d *state) saveError(e error) {
 	}
 }
 
-func (d *state) multinode(nodes []*xmlpath.Node, value reflect.Value) error {
+func (d *state) multinode(nodes []*xmlpath.Node, value reflect.Value) {
 	switch value.Kind() {
 	case reflect.Array, reflect.Slice:
 	default:
-		return &UnmarshalTypeError{"Multinode result", value.Type()}
+		err := &UnmarshalTypeError{"Multinode result", value.Type()}
+
+		d.saveError(err)
+		return
 	}
 
 	isSlice := value.Kind() == reflect.Slice
@@ -176,24 +190,28 @@ func (d *state) multinode(nodes []*xmlpath.Node, value reflect.Value) error {
 		}
 
 		if i < value.Len() {
-			d.saveError(d.unmarshal(node, value.Index(i)))
+			d.unmarshal(node, value.Index(i))
 		}
 	}
-
-	return d.firstError
 }
 
-func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) error {
+func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) {
 	m, tm, value := indirect(rv)
 
 	if m != nil {
-		return m.UnmarshalHTML(root.Bytes())
+		err := m.UnmarshalHTML(root.Bytes())
+		d.saveError(err)
+		return
 	} else if tm != nil {
-		return tm.UnmarshalText(root.Bytes())
+		err := tm.UnmarshalText(root.Bytes())
+		d.saveError(err)
+		return
 	}
 
 	if !rv.IsValid() {
-		return &InvalidUnmarshalError{nil}
+		err := &InvalidUnmarshalError{nil}
+		d.saveError(err)
+		return
 	}
 
 	s := root.String()
@@ -210,6 +228,9 @@ func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) error {
 			value.Set(reflect.ValueOf([]rune(s)))
 		}
 	default:
+		if debug {
+			fmt.Println("Unsupported type used: ", value.Kind())
+		}
 		// TODO: Change behavior on unsupported type?
 	case reflect.Interface:
 		if value.NumMethod() != 0 {
@@ -225,6 +246,8 @@ func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) error {
 	case reflect.String:
 		value.SetString(s)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		// Trim off any whitespace, since they're common in formatted HTML
+		s = strings.TrimSpace(s)
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil || value.OverflowInt(n) {
 			d.saveError(err)
@@ -232,6 +255,8 @@ func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) error {
 		}
 		value.SetInt(n)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		// Trim off any whitespace, since they're common in formatted HTML
+		s = strings.TrimSpace(s)
 		n, err := strconv.ParseUint(s, 10, 64)
 		if err != nil || value.OverflowUint(n) {
 			d.saveError(err)
@@ -239,6 +264,8 @@ func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) error {
 		}
 		value.SetUint(n)
 	case reflect.Float32, reflect.Float64:
+		// Trim off any whitespace, since they're common in formatted HTML
+		s = strings.TrimSpace(s)
 		n, err := strconv.ParseFloat(s, value.Type().Bits())
 		if err != nil || value.OverflowFloat(n) {
 			d.saveError(err)
@@ -247,17 +274,18 @@ func (d *state) unmarshal(root *xmlpath.Node, rv reflect.Value) error {
 		value.SetFloat(n)
 
 	}
-
-	return d.firstError
 }
 
-func (d *state) unmarshalStruct(root *xmlpath.Node, value reflect.Value) error {
+func (d *state) unmarshalStruct(root *xmlpath.Node, value reflect.Value) {
 	valueType := value.Type()
 
 	if value.Kind() != reflect.Struct {
-		return &InvalidUnmarshalError{
+		err := &InvalidUnmarshalError{
 			Type: value.Type(),
 		}
+
+		d.saveError(err)
+		return
 	}
 
 	for i := 0; i < value.NumField(); i++ {
@@ -269,10 +297,16 @@ func (d *state) unmarshalStruct(root *xmlpath.Node, value reflect.Value) error {
 
 		if path == "" {
 			// Skip fields with no tag, since we require an xpath
+			if debug {
+				fmt.Println("Skipping field due to lack of xpath: ", field)
+			}
 			continue
 		}
 
 		if !field.CanSet() {
+			if debug {
+				fmt.Println("Skipping field due to unsettability: ", field)
+			}
 			// TODO: Some way to feedback to the user
 			continue
 		}
@@ -288,17 +322,22 @@ func (d *state) unmarshalStruct(root *xmlpath.Node, value reflect.Value) error {
 			nodes = append(nodes, node)
 		}
 
+		if debug {
+			fmt.Printf("Executed %s with %d resulting nodes\n", path, len(nodes))
+		}
+
 		if len(nodes) > 1 {
 			d.multinode(nodes, field)
 			continue
 		} else if len(nodes) < 1 {
+			if debug {
+				fmt.Println("Xpath did not match any nodes: ", path)
+			}
 			continue
 		}
 
 		d.unmarshal(nodes[0], field)
 	}
-
-	return d.firstError
 }
 
 // indirect walks down v allocating pointers as needed until it gets to a non-pointer
