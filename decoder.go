@@ -1,3 +1,10 @@
+// unhtml is a package to parse HTML in the style of marshalling,
+// it uses a similar approach as encoding/xml and encoding/json
+// to parse HTML.
+//
+// Directions to the unmarshaller are done with xpath. unhtml currently
+// uses http://godoc.org/gopkg.in/xmlpath.v1 for its xpath needs. Reference
+// the documentation of xmlpath for supported xpath features.
 package unhtml
 
 import (
@@ -63,8 +70,8 @@ type Unmarshaler interface {
 // Unmarshal parses the HTML in reader and extracts data from it, results
 // are stored in the value pointed to by result.
 //
-// rootpath can be given to move the root node before unmarshalling, pass
-// an empty string to omit moving the root node.
+// rootpath is an xpath that can be given to move the root node before
+// unmarshalling, pass an empty string to omit moving the root node.
 //
 // Unmarshal can store values into the following types:
 //
@@ -73,12 +80,8 @@ type Unmarshaler interface {
 // 	float32, float64
 // 	An Unmarshaller
 // 	An encoding.TextUnmarshaller
-// 	Struct fields with an `unhtml` tag
+// 	Structs (Only considers filling fields with an `unhtml` tag)
 // 	Slices and arrays containing any of the above types
-//
-// Any xpaths intended for Unmarshalling need to be compatible with the supported
-// features gopkg.in/xmlpath.v1, see http://godoc.org/gopkg.in/xmlpath.v1 for
-// documentation on supported features.
 func Unmarshal(r io.Reader, result interface{}, rootpath string) error {
 	d, err := NewDecoder(r)
 
